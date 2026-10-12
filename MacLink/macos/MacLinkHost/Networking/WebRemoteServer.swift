@@ -47,6 +47,15 @@ final class WebRemoteServer {
         return data
     }()
 
+    private lazy var appIconPNGData: Data? = {
+        if let url = Bundle.main.url(forResource: "AppIcon", withExtension: "png"),
+           let data = try? Data(contentsOf: url) {
+            return data
+        }
+        let fallback = URL(fileURLWithPath: "/Users/shammas/Downloads/Jacky/MacLink/macos/MacLinkHost/Resources/AppIcon.png")
+        return try? Data(contentsOf: fallback)
+    }()
+
     func start(port: UInt16, jpegPublisher: AnyPublisher<Data, Never>) throws {
         stop()
 
@@ -230,9 +239,16 @@ final class WebRemoteServer {
             resp.append(jsonBytes)
             sendData(resp, on: conn, close: true)
 
-        case "/favicon.ico":
-            let resp = "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n"
-            sendData(resp.data(using: .utf8)!, on: conn, close: true)
+        case "/icon.png", "/favicon.ico", "/apple-touch-icon.png", "/apple-touch-icon-precomposed.png":
+            if let iconData = self.appIconPNGData {
+                let header = "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: \(iconData.count)\r\nCache-Control: public, max-age=86400\r\nConnection: close\r\n\r\n"
+                var resp = header.data(using: .utf8)!
+                resp.append(iconData)
+                sendData(resp, on: conn, close: true)
+            } else {
+                let resp = "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n"
+                sendData(resp.data(using: .utf8)!, on: conn, close: true)
+            }
 
         default:
             let notFound = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
@@ -611,6 +627,8 @@ private let webClientHTML = """
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>Shammy – Mac Remote Control</title>
+  <link rel="icon" type="image/png" href="/icon.png">
+  <link rel="apple-touch-icon" href="/icon.png">
   <style>
     :root {
       --bg: #090a0f;
@@ -1013,6 +1031,7 @@ private let webClientHTML = """
   <!-- Top Bar -->
   <header>
     <div class="brand">
+      <img src="/icon.png" alt="Shammy" style="width:26px; height:26px; border-radius:7px; object-fit:cover; box-shadow:0 2px 6px rgba(0,0,0,0.5);">
       <span class="status-dot"></span>
       <span>Shammy</span>
       <span id="ws-badge" style="display:none; font-size:11px; background:rgba(16,185,129,0.18); border:1px solid rgba(16,185,129,0.4); color:#34d399; padding:2px 8px; border-radius:12px; font-weight:600; margin-left:4px;">⚡ Realtime</span>

@@ -10,6 +10,10 @@
     <string>Shammy</string>
     <key>CFBundleDisplayName</key>
     <string>Shammy</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundleIconName</key>
+    <string>AppIcon</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>

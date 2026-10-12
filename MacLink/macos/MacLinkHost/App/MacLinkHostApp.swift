@@ -49,6 +49,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if let iconUrl = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
+           let iconImg = NSImage(contentsOf: iconUrl) {
+            NSApplication.shared.applicationIconImage = iconImg
+        } else if let iconUrl = Bundle.main.url(forResource: "AppIcon", withExtension: "png"),
+                  let iconImg = NSImage(contentsOf: iconUrl) {
+            NSApplication.shared.applicationIconImage = iconImg
+        }
+
         // Activate so the permission dialogs appear in front
         NSApp.activate(ignoringOtherApps: true)
         _ = CGRequestScreenCaptureAccess()

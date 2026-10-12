@@ -41,6 +41,14 @@ swiftc -sdk "$SDK_PATH" \
     macos/MacLinkHost/UI/*.swift \
     -o "$MACOS_DIR/Shammy"
 
+echo "Copying icon and resources..."
+if [ -f "$DIR/macos/MacLinkHost/Resources/AppIcon.icns" ]; then
+    cp -f "$DIR/macos/MacLinkHost/Resources/AppIcon.icns" "$RESOURCES_DIR/AppIcon.icns"
+fi
+if [ -f "$DIR/macos/MacLinkHost/Resources/AppIcon.png" ]; then
+    cp -f "$DIR/macos/MacLinkHost/Resources/AppIcon.png" "$RESOURCES_DIR/AppIcon.png"
+fi
+
 echo "Creating Info.plist..."
 cat << 'EOF' > "$CONTENTS_DIR/Info.plist"
 <?xml version="1.0" encoding="UTF-8"?>
@@ -55,6 +63,10 @@ cat << 'EOF' > "$CONTENTS_DIR/Info.plist"
     <string>Shammy</string>
     <key>CFBundleDisplayName</key>
     <string>Shammy</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundleIconName</key>
+    <string>AppIcon</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -91,7 +103,7 @@ if [ "$1" == "--run" ] || [ "$1" == "-r" ] || [ -z "$1" ]; then
     killall Shammy 2>/dev/null || true
     sleep 0.5
     echo "Launching Shammy in background..."
-    "$MACOS_DIR/Shammy" > /tmp/shammy.log 2>&1 &
+    open -n "$APP_DIR"
     sleep 1.5
     echo "Shammy is now running! (PID: $(pgrep Shammy | head -n 1))"
 fi
