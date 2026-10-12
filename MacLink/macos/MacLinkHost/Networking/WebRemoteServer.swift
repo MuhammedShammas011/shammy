@@ -235,7 +235,7 @@ final class WebRemoteServer {
             let capturing = isCapturing?() ?? false
             let granted = screenPerm || capturing || scCache
             let axGranted = axPerm || axCache
-            let json = "{\"status\":\"ok\",\"width\":\(info.width),\"height\":\(info.height),\"screenRecordingGranted\":\(granted),\"accessibilityGranted\":\(axGranted),\"isCapturing\":\(capturing)}"
+            let json = "{\"status\":\"ok\",\"width\":\(info.width),\"height\":\(info.height),\"screenRecordingGranted\":\(granted),\"accessibilityGranted\":\(axGranted),\"isCapturing\":\(capturing),\"cgPreflight\":\(screenPerm),\"axTrusted\":\(axPerm)}"
             let jsonBytes = json.data(using: .utf8)!
             let header = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: \(jsonBytes.count)\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n"
             var resp = header.data(using: .utf8)!
