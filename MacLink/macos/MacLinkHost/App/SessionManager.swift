@@ -43,8 +43,8 @@ final class SessionManager: ObservableObject {
     @Published var controlPort: UInt16 = 55_101
     @Published var webPort: UInt16     = 55_100
     @Published var videoPort: UInt16   = MacLinkConstants.defaultVideoPort
-    @Published var screenCaptureAuthorized: Bool = false
-    @Published var accessibilityAuthorized: Bool = false
+    @Published var screenCaptureAuthorized: Bool = UserDefaults.standard.bool(forKey: "shammy.screenCaptureGranted") || PermissionChecker.hasScreenRecordingPermission()
+    @Published var accessibilityAuthorized: Bool = UserDefaults.standard.bool(forKey: "shammy.accessibilityGranted") || PermissionChecker.hasAccessibilityPermission()
     @Published var framesPerSecond: Double = 0
     @Published var lastError: String = ""
 
@@ -101,8 +101,22 @@ final class SessionManager: ObservableObject {
     }
 
     func checkPermissions() {
-        screenCaptureAuthorized = PermissionChecker.hasScreenRecordingPermission()
-        accessibilityAuthorized = PermissionChecker.hasAccessibilityPermission()
+        let sc = PermissionChecker.hasScreenRecordingPermission() || capture.isCapturing
+        let ax = PermissionChecker.hasAccessibilityPermission()
+
+        if sc {
+            screenCaptureAuthorized = true
+            UserDefaults.standard.set(true, forKey: "shammy.screenCaptureGranted")
+        } else if !UserDefaults.standard.bool(forKey: "shammy.screenCaptureGranted") {
+            screenCaptureAuthorized = false
+        }
+
+        if ax {
+            accessibilityAuthorized = true
+            UserDefaults.standard.set(true, forKey: "shammy.accessibilityGranted")
+        } else if !UserDefaults.standard.bool(forKey: "shammy.accessibilityGranted") {
+            accessibilityAuthorized = false
+        }
     }
 
     func requestScreenRecordingPermission() {
@@ -168,9 +182,6 @@ final class SessionManager: ObservableObject {
             print("[SessionManager] Error starting capture: \(error)")
             lastError = "Screen capture: \(error.localizedDescription)"
             checkPermissions()
-            if !screenCaptureAuthorized {
-                PermissionChecker.requestScreenRecordingPermission()
-            }
         }
     }
 

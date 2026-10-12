@@ -228,11 +228,14 @@ final class WebRemoteServer {
 
         case "/api/status":
             let info = getDisplayInfo?() ?? DisplayInfo(width: 1920, height: 1080, scaleFactor: 2.0, displayID: 0)
+            let scCache = UserDefaults.standard.bool(forKey: "shammy.screenCaptureGranted")
+            let axCache = UserDefaults.standard.bool(forKey: "shammy.accessibilityGranted")
             let screenPerm = PermissionChecker.hasScreenRecordingPermission()
             let axPerm = PermissionChecker.hasAccessibilityPermission()
             let capturing = isCapturing?() ?? false
-            let granted = screenPerm || capturing
-            let json = "{\"status\":\"ok\",\"width\":\(info.width),\"height\":\(info.height),\"screenRecordingGranted\":\(granted),\"accessibilityGranted\":\(axPerm),\"isCapturing\":\(capturing)}"
+            let granted = screenPerm || capturing || scCache
+            let axGranted = axPerm || axCache
+            let json = "{\"status\":\"ok\",\"width\":\(info.width),\"height\":\(info.height),\"screenRecordingGranted\":\(granted),\"accessibilityGranted\":\(axGranted),\"isCapturing\":\(capturing)}"
             let jsonBytes = json.data(using: .utf8)!
             let header = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: \(jsonBytes.count)\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n"
             var resp = header.data(using: .utf8)!

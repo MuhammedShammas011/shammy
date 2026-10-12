@@ -44,8 +44,7 @@ struct MacLinkHostApp: App {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        // Keep running in menu bar even if window is closed
-        return false
+        return true
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -57,10 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApplication.shared.applicationIconImage = iconImg
         }
 
-        // Activate so the permission dialogs appear in front
         NSApp.activate(ignoringOtherApps: true)
-        _ = CGRequestScreenCaptureAccess()
-        PermissionChecker.requestAccessibilityPermission()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
