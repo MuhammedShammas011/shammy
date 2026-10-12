@@ -1245,7 +1245,7 @@ private let webClientHTML = """
 
     // ── Low-Latency Two-Way Audio Engine (Web Audio API) ───────────────────
     let audioCtx = null;
-    let audioEnabled = false;
+    let audioEnabled = true;
     let nextPlayTime = 0;
     const AUDIO_SAMPLE_RATE = 48000;
 
@@ -1258,6 +1258,25 @@ private let webClientHTML = """
         audioCtx.resume();
       }
     }
+
+    function autoUnlockAudio() {
+      initAudio();
+      if (audioCtx && audioCtx.state === 'suspended') {
+        audioCtx.resume();
+      }
+      const btn = document.getElementById('btn-audio');
+      const icon = document.getElementById('audio-icon');
+      const text = document.getElementById('audio-text');
+      if (btn && audioEnabled) {
+        btn.style.background = 'rgba(16, 185, 129, 0.35)';
+        btn.style.borderColor = 'rgba(16, 185, 129, 0.7)';
+        if (icon) icon.textContent = '🔊';
+        if (text) text.textContent = 'Audio: On';
+      }
+    }
+    window.addEventListener('touchstart', autoUnlockAudio, { once: true, passive: true });
+    window.addEventListener('pointerdown', autoUnlockAudio, { once: true, passive: true });
+    window.addEventListener('click', autoUnlockAudio, { once: true, passive: true });
 
     function toggleAudio() {
       initAudio();

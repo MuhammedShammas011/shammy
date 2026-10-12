@@ -46,6 +46,9 @@ final class ScreenCaptureManager: NSObject, SCStreamDelegate, SCStreamOutput {
     private var frameCount: Int = 0
     private var fpsTimer: Timer?
 
+    private let micCapture = MicrophoneCapture()
+    private var cancellables = Set<AnyCancellable>()
+
     // MARK: - Start / Stop
 
     func start() async throws {
@@ -99,12 +102,22 @@ final class ScreenCaptureManager: NSObject, SCStreamDelegate, SCStreamOutput {
 
         startFPSTimer()
         isCapturing = true
+
+        // Start hardware laptop microphone capture
+        micCapture.audioPublisher
+            .sink { [weak self] pcm in
+                self?.audioPublisher.send(pcm)
+            }
+            .store(in: &cancellables)
+        micCapture.start()
     }
 
     func stop() {
         isCapturing = false
         fpsTimer?.invalidate()
         fpsTimer = nil
+        micCapture.stop()
+        cancellables.removeAll()
         Task {
             try? await stream?.stopCapture()
             stream = nil
