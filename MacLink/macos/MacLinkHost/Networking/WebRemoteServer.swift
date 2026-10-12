@@ -761,6 +761,23 @@ private let webClientHTML = """
       align-items: center;
       gap: 8px;
     }
+    @media (max-width: 440px) {
+      header {
+        padding: 0 10px;
+      }
+      .brand {
+        font-size: 15px;
+        gap: 6px;
+      }
+      .header-actions {
+        gap: 5px;
+      }
+      .btn-pill {
+        padding: 5px 8px;
+        font-size: 11.5px;
+        gap: 4px;
+      }
+    }
     .btn-pill {
       background: rgba(255, 255, 255, 0.08);
       border: 1px solid var(--border);
@@ -791,6 +808,8 @@ private let webClientHTML = """
       align-items: center;
       justify-content: center;
       overflow: hidden;
+      padding-bottom: 96px;
+      box-sizing: border-box;
     }
     #screen {
       max-width: 100%;
@@ -799,6 +818,7 @@ private let webClientHTML = """
       display: block;
       pointer-events: none;
       box-shadow: 0 4px 30px rgba(0, 0, 0, 0.8);
+      margin: auto;
     }
     /* Touch Overlay */
     #touch-surface {
@@ -814,45 +834,62 @@ private let webClientHTML = """
     /* Floating Dock */
     #dock {
       position: absolute;
-      bottom: 16px;
+      bottom: 12px;
       left: 50%;
       transform: translateX(-50%);
-      background: rgba(20, 21, 31, 0.9);
-      backdrop-filter: blur(16px);
-      -webkit-backdrop-filter: blur(16px);
+      width: calc(100% - 20px);
+      max-width: 440px;
+      background: rgba(18, 20, 32, 0.92);
+      backdrop-filter: blur(20px);
+      -webkit-backdrop-filter: blur(20px);
       border: 1px solid var(--border);
-      border-radius: 28px;
-      padding: 6px 12px;
+      border-radius: 20px;
+      padding: 6px 8px;
       display: flex;
-      align-items: center;
-      gap: 8px;
-      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+      flex-direction: column;
+      gap: 6px;
+      box-shadow: 0 12px 36px rgba(0, 0, 0, 0.65);
       z-index: 90;
+      box-sizing: border-box;
+    }
+    .dock-row {
+      display: flex;
+      width: 100%;
+      gap: 5px;
+      align-items: center;
     }
     .dock-btn {
-      background: rgba(255, 255, 255, 0.06);
-      border: 1px solid transparent;
+      flex: 1;
+      min-width: 0;
+      background: rgba(255, 255, 255, 0.07);
+      border: 1px solid rgba(255, 255, 255, 0.08);
       color: var(--text);
-      padding: 8px 14px;
-      border-radius: 18px;
-      font-size: 13px;
+      padding: 7px 4px;
+      border-radius: 12px;
+      font-size: 12px;
       font-weight: 600;
       cursor: pointer;
       display: flex;
       align-items: center;
+      justify-content: center;
       gap: 4px;
+      white-space: nowrap;
+      text-align: center;
       transition: all 0.15s;
+      user-select: none;
+      -webkit-user-select: none;
     }
     .dock-btn:active, .dock-btn.active {
       background: var(--accent);
       color: #000;
+      border-color: var(--accent);
     }
 
     /* Joystick */
     #joystick-container {
       display: none;
       position: absolute;
-      bottom: 80px;
+      bottom: 106px;
       left: 20px;
       z-index: 95;
       touch-action: none;
@@ -937,7 +974,7 @@ private let webClientHTML = """
     #gamepad-actions {
       display: none;
       position: absolute;
-      bottom: 80px;
+      bottom: 106px;
       right: 20px;
       z-index: 95;
       flex-direction: column;
@@ -1148,13 +1185,17 @@ private let webClientHTML = """
 
   <!-- Floating Dock -->
   <div id="dock">
-    <button class="dock-btn" onclick="sendClick('left')">Left Click</button>
-    <button class="dock-btn" onclick="sendClick('right')">Right Click</button>
-    <button class="dock-btn" onclick="sendDoubleClick()">Double Click</button>
-    <button id="btn-drag" class="dock-btn" onclick="toggleDrag()">Drag: Off</button>
-    <button id="btn-mic" class="dock-btn" onclick="toggleMic()" style="border:1px solid rgba(239,68,68,0.45);"><span id="mic-icon">🎙️</span> <span id="mic-text">Mic</span></button>
-    <button id="btn-joystick" class="dock-btn" onclick="toggleJoystick()">🕹️ Stick</button>
-    <button class="dock-btn" onclick="toggleKeyboard()">⌨️ Keys</button>
+    <div class="dock-row">
+      <button class="dock-btn" onclick="sendClick('left')">Left Click</button>
+      <button class="dock-btn" onclick="sendClick('right')">Right Click</button>
+      <button class="dock-btn" onclick="sendDoubleClick()">Double Click</button>
+      <button id="btn-drag" class="dock-btn" onclick="toggleDrag()">Drag: Off</button>
+    </div>
+    <div class="dock-row">
+      <button id="btn-mic" class="dock-btn" onclick="toggleMic()" style="border:1px solid rgba(239,68,68,0.45);"><span id="mic-icon">🎙️</span> <span id="mic-text">Mic</span></button>
+      <button id="btn-joystick" class="dock-btn" onclick="toggleJoystick()">🕹️ Stick</button>
+      <button class="dock-btn" onclick="toggleKeyboard()">⌨️ Keys</button>
+    </div>
   </div>
 
   <!-- Keyboard Drawer -->
