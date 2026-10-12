@@ -213,7 +213,6 @@ struct ContentView: View {
             Button("Start Session") {
                 session.startSession()
             }
-            .disabled(!session.screenCaptureAuthorized)
             .buttonStyle(PrimaryButtonStyle())
 
         case .listening, .handshaking:

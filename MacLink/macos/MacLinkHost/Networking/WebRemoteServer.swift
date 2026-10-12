@@ -25,6 +25,10 @@ final class WebRemoteServer {
     var inputInjector: InputInjector?
     var isCapturing: (() -> Bool)?
     var onUpdateSettings: ((Int, CGFloat) -> Void)?
+    var onStartSession: (() -> Void)?
+    var onStopSession: (() -> Void)?
+    var getSessionState: (() -> String)?
+    var getLastError: (() -> String)?
 
     private lazy var placeholderJPEGData: Data = {
         let size = NSSize(width: 1280, height: 720)
@@ -226,16 +230,25 @@ final class WebRemoteServer {
         case "/api/settings":
             handleSettingsAPI(data: data, conn: conn)
 
+        case "/api/session/start":
+            onStartSession?()
+            let respStart = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{\"status\":\"ok\"}"
+            sendData(respStart.data(using: .utf8)!, on: conn, close: true)
+
+        case "/api/session/stop":
+            onStopSession?()
+            let respStop = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{\"status\":\"ok\"}"
+            sendData(respStop.data(using: .utf8)!, on: conn, close: true)
+
         case "/api/status":
             let info = getDisplayInfo?() ?? DisplayInfo(width: 1920, height: 1080, scaleFactor: 2.0, displayID: 0)
-            let scCache = UserDefaults.standard.bool(forKey: "shammy.screenCaptureGranted")
-            let axCache = UserDefaults.standard.bool(forKey: "shammy.accessibilityGranted")
             let screenPerm = PermissionChecker.hasScreenRecordingPermission()
             let axPerm = PermissionChecker.hasAccessibilityPermission()
             let capturing = isCapturing?() ?? false
-            let granted = screenPerm || capturing || scCache
-            let axGranted = axPerm || axCache
-            let json = "{\"status\":\"ok\",\"width\":\(info.width),\"height\":\(info.height),\"screenRecordingGranted\":\(granted),\"accessibilityGranted\":\(axGranted),\"isCapturing\":\(capturing),\"cgPreflight\":\(screenPerm),\"axTrusted\":\(axPerm)}"
+            let granted = screenPerm || capturing
+            let sessState = getSessionState?() ?? "Idle"
+            let err = getLastError?() ?? ""
+            let json = "{\"status\":\"ok\",\"width\":\(info.width),\"height\":\(info.height),\"screenRecordingGranted\":\(granted),\"accessibilityGranted\":\(axPerm),\"isCapturing\":\(capturing),\"sessionState\":\"\(sessState)\",\"lastError\":\"\(err)\"}"
             let jsonBytes = json.data(using: .utf8)!
             let header = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: \(jsonBytes.count)\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n"
             var resp = header.data(using: .utf8)!

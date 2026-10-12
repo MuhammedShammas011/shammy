@@ -103,7 +103,7 @@ if [ "$1" == "--run" ] || [ "$1" == "-r" ] || [ -z "$1" ]; then
     killall Shammy 2>/dev/null || true
     sleep 0.5
     echo "Launching Shammy in background..."
-    open -n "$APP_DIR"
+    open -n "$APP_DIR" --stdout "$DIR/shammy.log" --stderr "$DIR/shammy_err.log"
     sleep 1.5
     echo "Shammy is now running! (PID: $(pgrep Shammy | head -n 1))"
 fi

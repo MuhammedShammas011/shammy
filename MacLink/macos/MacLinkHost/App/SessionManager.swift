@@ -43,8 +43,8 @@ final class SessionManager: ObservableObject {
     @Published var controlPort: UInt16 = 55_101
     @Published var webPort: UInt16     = 55_100
     @Published var videoPort: UInt16   = MacLinkConstants.defaultVideoPort
-    @Published var screenCaptureAuthorized: Bool = UserDefaults.standard.bool(forKey: "shammy.screenCaptureGranted") || PermissionChecker.hasScreenRecordingPermission()
-    @Published var accessibilityAuthorized: Bool = UserDefaults.standard.bool(forKey: "shammy.accessibilityGranted") || PermissionChecker.hasAccessibilityPermission()
+    @Published var screenCaptureAuthorized: Bool = PermissionChecker.hasScreenRecordingPermission()
+    @Published var accessibilityAuthorized: Bool = PermissionChecker.hasAccessibilityPermission()
     @Published var framesPerSecond: Double = 0
     @Published var lastError: String = ""
 
@@ -101,21 +101,19 @@ final class SessionManager: ObservableObject {
     }
 
     func checkPermissions() {
-        let sc = PermissionChecker.hasScreenRecordingPermission() || capture.isCapturing
         let ax = PermissionChecker.hasAccessibilityPermission()
+        accessibilityAuthorized = ax
 
-        if sc {
+        if capture.isCapturing || PermissionChecker.hasScreenRecordingPermission() {
             screenCaptureAuthorized = true
-            UserDefaults.standard.set(true, forKey: "shammy.screenCaptureGranted")
-        } else if !UserDefaults.standard.bool(forKey: "shammy.screenCaptureGranted") {
-            screenCaptureAuthorized = false
-        }
-
-        if ax {
-            accessibilityAuthorized = true
-            UserDefaults.standard.set(true, forKey: "shammy.accessibilityGranted")
-        } else if !UserDefaults.standard.bool(forKey: "shammy.accessibilityGranted") {
-            accessibilityAuthorized = false
+        } else {
+            Task { [weak self] in
+                let scReal = await PermissionChecker.verifyScreenRecordingPermission()
+                await MainActor.run {
+                    guard let self = self else { return }
+                    self.screenCaptureAuthorized = scReal || self.capture.isCapturing
+                }
+            }
         }
     }
 
@@ -145,6 +143,22 @@ final class SessionManager: ObservableObject {
         webServer.onUpdateSettings = { [weak self] fps, quality in
             self?.capture.updateSettings(fps: fps, width: 1280, height: 800)
             self?.streamer.jpegQuality = quality
+        }
+        webServer.onStartSession = { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.startSession()
+            }
+        }
+        webServer.onStopSession = { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.stopSession()
+            }
+        }
+        webServer.getSessionState = { [weak self] in
+            self?.state.displayString ?? "Idle"
+        }
+        webServer.getLastError = { [weak self] in
+            self?.lastError ?? ""
         }
 
         // Pipe frames from capture to streamer
@@ -190,44 +204,29 @@ final class SessionManager: ObservableObject {
     private func startInternal() async {
         updateNetworkAddresses()
 
-        // 1. Verify permissions
-        screenCaptureAuthorized = PermissionChecker.hasScreenRecordingPermission()
-        accessibilityAuthorized = PermissionChecker.hasAccessibilityPermission()
-
-        guard screenCaptureAuthorized else {
-            state = .error("Screen recording permission required. Grant it in System Settings → Privacy & Security → Screen Recording.")
-            return
-        }
-
-        // 2. Start control TCP server
-        do {
-            try await server.start(port: controlPort)
-        } catch {
-            state = .error("Failed to start control server: \(error.localizedDescription)")
-            return
-        }
-
-        // 3. Wait for a client connection
-        do {
-            let clientName = try await server.waitForClient()
-            connectedDeviceName = clientName
-        } catch {
-            state = .error("Connection failed: \(error.localizedDescription)")
-            return
-        }
-
-        state = .connected
-
-        // 4. Start screen capture
+        // 1. Start screen capture immediately
         do {
             try await capture.start()
+            screenCaptureAuthorized = true
+            state = .connected
+            if connectedDeviceName.isEmpty {
+                connectedDeviceName = "Screen streaming active"
+            }
+            lastError = ""
+            print("[SessionManager] Screen capture started successfully!")
         } catch {
-            stopSession()
-            state = .error("Screen capture failed: \(error.localizedDescription)")
+            print("[SessionManager] Screen capture failed to start: \(error)")
+            screenCaptureAuthorized = false
+            state = .error("Screen recording permission required. Please allow Shammy in System Settings → Privacy & Security → Screen Recording, then click Retry.")
+            lastError = "Screen Recording permission needed"
+            PermissionChecker.requestScreenRecordingPermission()
             return
         }
 
-        // 5. Pipe frames → video streamer → client
+        // 2. Check accessibility (does not block streaming)
+        accessibilityAuthorized = PermissionChecker.hasAccessibilityPermission()
+
+        // 3. Pipe frames from capture to video streamer
         capture.framePublisher
             .sink { [weak self] frame in
                 self?.streamer.enqueue(frame)
@@ -238,22 +237,40 @@ final class SessionManager: ObservableObject {
             .receive(on: RunLoop.main)
             .assign(to: &$framesPerSecond)
 
-        // 6. Route incoming control messages to input injector
-        server.messagePublisher
-            .sink { [weak self] message in
-                self?.handleControlMessage(message)
-            }
-            .store(in: &cancellables)
+        // 4. Start control TCP server in background for native iOS client without blocking
+        do {
+            try await server.start(port: controlPort)
+            print("[SessionManager] Native control server listening on port \(controlPort)")
 
-        // 7. Send display info to client
-        let info = capture.currentDisplayInfo
-        let msg = ControlMessage(type: .displayInfo,
-                                  payload: .displayInfo(DisplayInfoPayload(
-                                    width: info.width,
-                                    height: info.height,
-                                    scaleFactor: info.scaleFactor,
-                                    displayIndex: 0)))
-        try? await server.send(msg)
+            server.messagePublisher
+                .sink { [weak self] message in
+                    self?.handleControlMessage(message)
+                }
+                .store(in: &cancellables)
+
+            // Listen for native iOS client concurrently in background
+            Task { [weak self] in
+                guard let self = self else { return }
+                do {
+                    let clientName = try await self.server.waitForClient()
+                    await MainActor.run {
+                        self.connectedDeviceName = clientName
+                    }
+                    let info = self.capture.currentDisplayInfo
+                    let msg = ControlMessage(type: .displayInfo,
+                                              payload: .displayInfo(DisplayInfoPayload(
+                                                width: info.width,
+                                                height: info.height,
+                                                scaleFactor: info.scaleFactor,
+                                                displayIndex: 0)))
+                    try? await self.server.send(msg)
+                } catch {
+                    print("[SessionManager] Native client wait ended: \(error.localizedDescription)")
+                }
+            }
+        } catch {
+            print("[SessionManager] Native control server note: \(error.localizedDescription)")
+        }
     }
 
     // MARK: - Message routing

@@ -9,14 +9,26 @@ struct PermissionChecker {
 
     // MARK: - Screen Recording
 
-    /// Returns true if the app has been granted screen recording permission.
+    /// Synchronously checks if the app has screen recording permission.
     static func hasScreenRecordingPermission() -> Bool {
         return CGPreflightScreenCaptureAccess()
     }
 
-    /// Opens System Settings and prompts for screen recording access if not already granted.
+    /// Asynchronously verifies screen recording permission using ScreenCaptureKit.
+    static func verifyScreenRecordingPermission() async -> Bool {
+        if CGPreflightScreenCaptureAccess() {
+            return true
+        }
+        do {
+            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+            return !content.displays.isEmpty
+        } catch {
+            return false
+        }
+    }
+
+    /// Opens System Settings and prompts for screen recording access.
     static func requestScreenRecordingPermission() {
-        guard !hasScreenRecordingPermission() else { return }
         _ = CGRequestScreenCaptureAccess()
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
             NSWorkspace.shared.open(url)
@@ -30,9 +42,8 @@ struct PermissionChecker {
         return AXIsProcessTrusted()
     }
 
-    /// Opens the Accessibility pane and, if not trusted, prompts via system dialog.
+    /// Opens the Accessibility pane and prompts via system dialog.
     static func requestAccessibilityPermission() {
-        guard !hasAccessibilityPermission() else { return }
         let options: NSDictionary = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
         _ = AXIsProcessTrustedWithOptions(options)
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
