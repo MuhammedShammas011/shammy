@@ -16,6 +16,7 @@ final class WebRemoteServer {
     private var streamConnections = [ObjectIdentifier: NWConnection]()
     private let streamQueue = DispatchQueue(label: "shammy.webstream", qos: .userInteractive)
     private var wsConnections = [ObjectIdentifier: NWConnection]()
+    private var audioSubscribedConnections = Set<ObjectIdentifier>()
     private let wsQueue = DispatchQueue(label: "shammy.wsconnections", qos: .userInteractive)
     let audioPlayer = AudioOutputEngine()
     private var cancellables = Set<AnyCancellable>()
@@ -346,7 +347,10 @@ final class WebRemoteServer {
             conn.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, err in
                 guard let self = self else { return }
                 if err != nil {
-                    self.wsQueue.async { self.wsConnections.removeValue(forKey: connId) }
+                    self.wsQueue.async {
+                        self.wsConnections.removeValue(forKey: connId)
+                        self.audioSubscribedConnections.remove(connId)
+                    }
                     conn.cancel()
                     return
                 }
@@ -355,7 +359,10 @@ final class WebRemoteServer {
                     self.processWebSocketFrames(&buffer, conn: conn)
                 }
                 if isComplete {
-                    self.wsQueue.async { self.wsConnections.removeValue(forKey: connId) }
+                    self.wsQueue.async {
+                        self.wsConnections.removeValue(forKey: connId)
+                        self.audioSubscribedConnections.remove(connId)
+                    }
                     conn.cancel()
                     return
                 }
@@ -417,7 +424,10 @@ final class WebRemoteServer {
 
             if opcode == 0x8 { // Close
                 let connId = ObjectIdentifier(conn)
-                wsQueue.async { self.wsConnections.removeValue(forKey: connId) }
+                wsQueue.async {
+                    self.wsConnections.removeValue(forKey: connId)
+                    self.audioSubscribedConnections.remove(connId)
+                }
                 conn.cancel()
                 return
             } else if opcode == 0x9 { // Ping -> Pong
@@ -425,7 +435,21 @@ final class WebRemoteServer {
                 conn.send(content: pong, completion: .contentProcessed { _ in })
             } else if opcode == 0x1 { // Text frame
                 if let dict = try? JSONSerialization.jsonObject(with: unmasked) as? [String: Any] {
-                    self.handleInputDict(dict)
+                    if let action = dict["action"] as? String, action == "audio" {
+                        let enabled = dict["enabled"] as? Bool ?? false
+                        let connId = ObjectIdentifier(conn)
+                        self.wsQueue.async {
+                            if enabled {
+                                self.audioSubscribedConnections.insert(connId)
+                                print("[WebRemoteServer] Client subscribed to audio stream")
+                            } else {
+                                self.audioSubscribedConnections.remove(connId)
+                                print("[WebRemoteServer] Client unsubscribed from audio stream")
+                            }
+                        }
+                    } else {
+                        self.handleInputDict(dict)
+                    }
                 }
             } else if opcode == 0x2 { // Binary frame: Phone microphone audio
                 self.audioPlayer.playAudioChunk(unmasked)
@@ -437,10 +461,12 @@ final class WebRemoteServer {
 
     func broadcastAudio(_ data: Data) {
         wsQueue.async { [weak self] in
-            guard let self = self, !self.wsConnections.isEmpty else { return }
+            guard let self = self, !self.audioSubscribedConnections.isEmpty else { return }
             let frame = self.makeWebSocketBinaryFrame(data)
-            for (_, conn) in self.wsConnections {
-                conn.send(content: frame, completion: .contentProcessed { _ in })
+            for connId in self.audioSubscribedConnections {
+                if let conn = self.wsConnections[connId] {
+                    conn.send(content: frame, completion: .contentProcessed { _ in })
+                }
             }
         }
     }
@@ -1137,9 +1163,9 @@ private let webClientHTML = """
       <span id="ws-badge" style="display:none; font-size:11px; background:rgba(16,185,129,0.18); border:1px solid rgba(16,185,129,0.4); color:#34d399; padding:2px 8px; border-radius:12px; font-weight:600; margin-left:4px;">⚡ Realtime</span>
     </div>
     <div class="header-actions">
-      <button id="btn-audio" class="btn-pill" onclick="toggleAudio()" style="background:rgba(59,130,246,0.22); border:1px solid rgba(59,130,246,0.5);">
+      <button id="btn-audio" class="btn-pill" onclick="toggleAudio()">
         <span id="audio-icon">🔇</span>
-        <span id="audio-text">Audio</span>
+        <span id="audio-text">Audio: Off</span>
       </button>
       <button id="btn-speed" class="btn-pill" onclick="cycleQuality()">⚡ 30 FPS</button>
       <button id="btn-mode" class="btn-pill" onclick="toggleMode()">
@@ -1261,8 +1287,12 @@ private let webClientHTML = """
           wsConnected = true;
           const badge = document.getElementById('ws-badge');
           if (badge) badge.style.display = 'inline-block';
+          if (audioEnabled) {
+            sendInput({ action: 'audio', enabled: true });
+          }
         };
         ws.onmessage = (event) => {
+          if (!audioEnabled) return;
           if (event.data instanceof ArrayBuffer) {
             playPCMChunk(event.data);
           } else if (event.data instanceof Blob) {
@@ -1286,7 +1316,7 @@ private let webClientHTML = """
 
     // ── Low-Latency Two-Way Audio Engine (Web Audio API) ───────────────────
     let audioCtx = null;
-    let audioEnabled = true;
+    let audioEnabled = false; // Audio OFF by default - only connects on explicit user click
     let nextPlayTime = 0;
     const AUDIO_SAMPLE_RATE = 48000;
 
@@ -1300,52 +1330,40 @@ private let webClientHTML = """
       }
     }
 
-    function autoUnlockAudio() {
-      initAudio();
-      if (audioCtx && audioCtx.state === 'suspended') {
-        audioCtx.resume();
-      }
-      const btn = document.getElementById('btn-audio');
-      const icon = document.getElementById('audio-icon');
-      const text = document.getElementById('audio-text');
-      if (btn && audioEnabled) {
-        btn.style.background = 'rgba(16, 185, 129, 0.35)';
-        btn.style.borderColor = 'rgba(16, 185, 129, 0.7)';
-        if (icon) icon.textContent = '🔊';
-        if (text) text.textContent = 'Audio: On';
-      }
-    }
-    window.addEventListener('touchstart', autoUnlockAudio, { once: true, passive: true });
-    window.addEventListener('pointerdown', autoUnlockAudio, { once: true, passive: true });
-    window.addEventListener('click', autoUnlockAudio, { once: true, passive: true });
-
     function toggleAudio() {
-      initAudio();
       audioEnabled = !audioEnabled;
       const btn = document.getElementById('btn-audio');
       const icon = document.getElementById('audio-icon');
       const text = document.getElementById('audio-text');
       if (audioEnabled) {
-        if (audioCtx.state === 'suspended') audioCtx.resume();
-        nextPlayTime = audioCtx.currentTime + 0.04;
+        initAudio();
+        if (audioCtx && audioCtx.state === 'suspended') {
+          audioCtx.resume();
+        }
+        nextPlayTime = (audioCtx ? audioCtx.currentTime : 0) + 0.04;
         if (btn) {
           btn.style.background = 'rgba(16, 185, 129, 0.35)';
           btn.style.borderColor = 'rgba(16, 185, 129, 0.7)';
         }
         if (icon) icon.textContent = '🔊';
         if (text) text.textContent = 'Audio: On';
+        sendInput({ action: 'audio', enabled: true });
       } else {
+        if (audioCtx && audioCtx.state === 'running') {
+          audioCtx.suspend();
+        }
         if (btn) {
-          btn.style.background = 'rgba(59,130,246,0.22)';
-          btn.style.borderColor = 'rgba(59,130,246,0.5)';
+          btn.style.background = '';
+          btn.style.borderColor = '';
         }
         if (icon) icon.textContent = '🔇';
         if (text) text.textContent = 'Audio: Off';
+        sendInput({ action: 'audio', enabled: false });
       }
     }
 
     function playPCMChunk(arrayBuffer) {
-      if (!audioEnabled || !audioCtx) return;
+      if (!audioEnabled || !audioCtx || audioCtx.state !== 'running') return;
       if (audioCtx.state === 'suspended') audioCtx.resume();
 
       const int16 = new Int16Array(arrayBuffer);
