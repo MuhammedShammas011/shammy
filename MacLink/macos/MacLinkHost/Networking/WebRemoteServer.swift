@@ -15,6 +15,9 @@ final class WebRemoteServer {
     private var listener: NWListener?
     private var streamConnections = [ObjectIdentifier: NWConnection]()
     private let streamQueue = DispatchQueue(label: "shammy.webstream", qos: .userInteractive)
+    private var wsConnections = [ObjectIdentifier: NWConnection]()
+    private let wsQueue = DispatchQueue(label: "shammy.wsconnections", qos: .userInteractive)
+    let audioPlayer = AudioOutputEngine()
     private var cancellables = Set<AnyCancellable>()
 
     private var isSendingFrame = [ObjectIdentifier: Bool]()
@@ -333,11 +336,17 @@ final class WebRemoteServer {
     }
 
     private func startWebSocketLoop(conn: NWConnection) {
+        let connId = ObjectIdentifier(conn)
+        wsQueue.async { [weak self] in
+            self?.wsConnections[connId] = conn
+        }
+
         var buffer = Data()
         func readNext() {
             conn.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, err in
                 guard let self = self else { return }
                 if err != nil {
+                    self.wsQueue.async { self.wsConnections.removeValue(forKey: connId) }
                     conn.cancel()
                     return
                 }
@@ -346,6 +355,7 @@ final class WebRemoteServer {
                     self.processWebSocketFrames(&buffer, conn: conn)
                 }
                 if isComplete {
+                    self.wsQueue.async { self.wsConnections.removeValue(forKey: connId) }
                     conn.cancel()
                     return
                 }
@@ -406,6 +416,8 @@ final class WebRemoteServer {
             buffer.removeSubrange(buffer.startIndex..<(buffer.startIndex + totalFrameLen))
 
             if opcode == 0x8 { // Close
+                let connId = ObjectIdentifier(conn)
+                wsQueue.async { self.wsConnections.removeValue(forKey: connId) }
                 conn.cancel()
                 return
             } else if opcode == 0x9 { // Ping -> Pong
@@ -415,8 +427,43 @@ final class WebRemoteServer {
                 if let dict = try? JSONSerialization.jsonObject(with: unmasked) as? [String: Any] {
                     self.handleInputDict(dict)
                 }
+            } else if opcode == 0x2 { // Binary frame: Phone microphone audio
+                self.audioPlayer.playAudioChunk(unmasked)
             }
         }
+    }
+
+    // MARK: - Audio Broadcasting
+
+    func broadcastAudio(_ data: Data) {
+        wsQueue.async { [weak self] in
+            guard let self = self, !self.wsConnections.isEmpty else { return }
+            let frame = self.makeWebSocketBinaryFrame(data)
+            for (_, conn) in self.wsConnections {
+                conn.send(content: frame, completion: .contentProcessed { _ in })
+            }
+        }
+    }
+
+    private func makeWebSocketBinaryFrame(_ data: Data) -> Data {
+        var frame = Data()
+        frame.append(0x82) // FIN=1, Opcode=2 (Binary)
+        let count = data.count
+        if count < 126 {
+            frame.append(UInt8(count))
+        } else if count <= 65535 {
+            frame.append(126)
+            frame.append(UInt8((count >> 8) & 0xFF))
+            frame.append(UInt8(count & 0xFF))
+        } else {
+            frame.append(127)
+            let len = UInt64(count)
+            for i in (0..<8).reversed() {
+                frame.append(UInt8((len >> (i * 8)) & 0xFF))
+            }
+        }
+        frame.append(data)
+        return frame
     }
 
     // MARK: - Input Message Processing (Shared for WebSocket & HTTP)
@@ -1053,12 +1100,16 @@ private let webClientHTML = """
       <span id="ws-badge" style="display:none; font-size:11px; background:rgba(16,185,129,0.18); border:1px solid rgba(16,185,129,0.4); color:#34d399; padding:2px 8px; border-radius:12px; font-weight:600; margin-left:4px;">⚡ Realtime</span>
     </div>
     <div class="header-actions">
+      <button id="btn-audio" class="btn-pill" onclick="toggleAudio()" style="background:rgba(59,130,246,0.22); border:1px solid rgba(59,130,246,0.5);">
+        <span id="audio-icon">🔇</span>
+        <span id="audio-text">Audio</span>
+      </button>
       <button id="btn-speed" class="btn-pill" onclick="cycleQuality()">⚡ 30 FPS</button>
       <button id="btn-mode" class="btn-pill" onclick="toggleMode()">
         <span id="mode-icon">👆</span>
         <span id="mode-text">Touch</span>
       </button>
-      <button class="btn-pill" onclick="toggleFullscreen()">⛶ Fullscreen</button>
+      <button class="btn-pill" onclick="toggleFullscreen()">⛶ Full</button>
     </div>
   </header>
 
@@ -1101,6 +1152,7 @@ private let webClientHTML = """
     <button class="dock-btn" onclick="sendClick('right')">Right Click</button>
     <button class="dock-btn" onclick="sendDoubleClick()">Double Click</button>
     <button id="btn-drag" class="dock-btn" onclick="toggleDrag()">Drag: Off</button>
+    <button id="btn-mic" class="dock-btn" onclick="toggleMic()" style="border:1px solid rgba(239,68,68,0.45);"><span id="mic-icon">🎙️</span> <span id="mic-text">Mic</span></button>
     <button id="btn-joystick" class="dock-btn" onclick="toggleJoystick()">🕹️ Stick</button>
     <button class="dock-btn" onclick="toggleKeyboard()">⌨️ Keys</button>
   </div>
@@ -1163,10 +1215,18 @@ private let webClientHTML = """
       const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
       try {
         ws = new WebSocket(`${proto}//${location.host}/ws`);
+        ws.binaryType = 'arraybuffer';
         ws.onopen = () => {
           wsConnected = true;
           const badge = document.getElementById('ws-badge');
           if (badge) badge.style.display = 'inline-block';
+        };
+        ws.onmessage = (event) => {
+          if (event.data instanceof ArrayBuffer) {
+            playPCMChunk(event.data);
+          } else if (event.data instanceof Blob) {
+            event.data.arrayBuffer().then(playPCMChunk);
+          }
         };
         ws.onclose = () => {
           wsConnected = false;
@@ -1182,6 +1242,158 @@ private let webClientHTML = """
       }
     }
     initWS();
+
+    // ── Low-Latency Two-Way Audio Engine (Web Audio API) ───────────────────
+    let audioCtx = null;
+    let audioEnabled = false;
+    let nextPlayTime = 0;
+    const AUDIO_SAMPLE_RATE = 48000;
+
+    function initAudio() {
+      if (!audioCtx) {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        audioCtx = new AudioContextClass({ sampleRate: AUDIO_SAMPLE_RATE });
+      }
+      if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+      }
+    }
+
+    function toggleAudio() {
+      initAudio();
+      audioEnabled = !audioEnabled;
+      const btn = document.getElementById('btn-audio');
+      const icon = document.getElementById('audio-icon');
+      const text = document.getElementById('audio-text');
+      if (audioEnabled) {
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        nextPlayTime = audioCtx.currentTime + 0.04;
+        if (btn) {
+          btn.style.background = 'rgba(16, 185, 129, 0.35)';
+          btn.style.borderColor = 'rgba(16, 185, 129, 0.7)';
+        }
+        if (icon) icon.textContent = '🔊';
+        if (text) text.textContent = 'Audio: On';
+      } else {
+        if (btn) {
+          btn.style.background = 'rgba(59,130,246,0.22)';
+          btn.style.borderColor = 'rgba(59,130,246,0.5)';
+        }
+        if (icon) icon.textContent = '🔇';
+        if (text) text.textContent = 'Audio: Off';
+      }
+    }
+
+    function playPCMChunk(arrayBuffer) {
+      if (!audioEnabled || !audioCtx) return;
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+
+      const int16 = new Int16Array(arrayBuffer);
+      if (int16.length === 0) return;
+
+      const float32 = new Float32Array(int16.length);
+      for (let i = 0; i < int16.length; i++) {
+        float32[i] = int16[i] / 32768.0;
+      }
+
+      const audioBuffer = audioCtx.createBuffer(1, float32.length, AUDIO_SAMPLE_RATE);
+      audioBuffer.copyToChannel(float32, 0);
+
+      const source = audioCtx.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(audioCtx.destination);
+
+      const now = audioCtx.currentTime;
+      if (nextPlayTime < now) {
+        nextPlayTime = now + 0.02;
+      }
+      source.start(nextPlayTime);
+      nextPlayTime += audioBuffer.duration;
+    }
+
+    // ── Phone Microphone -> Mac Output ──────────────────────────────────────
+    let micStream = null;
+    let micAudioCtx = null;
+    let micProcessor = null;
+    let isMicOn = false;
+
+    async function toggleMic() {
+      if (isMicOn) {
+        stopMic();
+      } else {
+        await startMic();
+      }
+    }
+
+    async function startMic() {
+      try {
+        initAudio();
+        micStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            channelCount: 1,
+            sampleRate: AUDIO_SAMPLE_RATE,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true
+          }
+        });
+
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        micAudioCtx = new AudioContextClass({ sampleRate: AUDIO_SAMPLE_RATE });
+        const source = micAudioCtx.createMediaStreamSource(micStream);
+
+        micProcessor = micAudioCtx.createScriptProcessor(2048, 1, 1);
+        source.connect(micProcessor);
+        micProcessor.connect(micAudioCtx.destination);
+
+        micProcessor.onaudioprocess = (e) => {
+          if (!isMicOn || !ws || ws.readyState !== WebSocket.OPEN) return;
+          const inputData = e.inputBuffer.getChannelData(0);
+          const int16 = new Int16Array(inputData.length);
+          for (let i = 0; i < inputData.length; i++) {
+            const s = Math.max(-1, Math.min(1, inputData[i]));
+            int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+          }
+          ws.send(int16.buffer);
+        };
+
+        isMicOn = true;
+        updateMicButton(true);
+      } catch (err) {
+        alert("Microphone access failed: " + err.message);
+        isMicOn = false;
+        updateMicButton(false);
+      }
+    }
+
+    function stopMic() {
+      isMicOn = false;
+      if (micProcessor) {
+        micProcessor.disconnect();
+        micProcessor = null;
+      }
+      if (micStream) {
+        micStream.getTracks().forEach(t => t.stop());
+        micStream = null;
+      }
+      if (micAudioCtx) {
+        micAudioCtx.close();
+        micAudioCtx = null;
+      }
+      updateMicButton(false);
+    }
+
+    function updateMicButton(on) {
+      const btn = document.getElementById('btn-mic');
+      const icon = document.getElementById('mic-icon');
+      const text = document.getElementById('mic-text');
+      if (btn) {
+        btn.style.background = on ? 'rgba(239, 68, 68, 0.35)' : '';
+        btn.style.borderColor = on ? '#ef4444' : '';
+        if (icon) icon.textContent = on ? '🔴' : '🎙️';
+        if (text) text.textContent = on ? 'Mic: LIVE' : 'Mic';
+      }
+    }
 
     function sendInput(data) {
       if (ws && wsConnected && ws.readyState === WebSocket.OPEN) {

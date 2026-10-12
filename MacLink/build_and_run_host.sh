@@ -33,8 +33,11 @@ swiftc -sdk "$SDK_PATH" \
     -framework Network \
     -framework CryptoKit \
     -framework AppKit \
+    -framework AudioToolbox \
+    -framework AVFoundation \
     shared/Protocol/MacLinkProtocol.swift \
     macos/MacLinkHost/App/*.swift \
+    macos/MacLinkHost/Audio/*.swift \
     macos/MacLinkHost/Capture/*.swift \
     macos/MacLinkHost/Input/*.swift \
     macos/MacLinkHost/Networking/*.swift \
@@ -79,6 +82,8 @@ cat << 'EOF' > "$CONTENTS_DIR/Info.plist"
     <true/>
     <key>NSScreenCaptureUsageDescription</key>
     <string>Shammy needs screen recording permission to stream your desktop to your iPhone.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Shammy needs microphone access to stream your laptop microphone to your phone and support calls.</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>Shammy needs accessibility permission to control the mouse and keyboard.</string>
     <key>NSLocalNetworkUsageDescription</key>

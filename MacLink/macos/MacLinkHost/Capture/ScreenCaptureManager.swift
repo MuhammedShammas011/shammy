@@ -7,6 +7,7 @@ import Foundation
 import ScreenCaptureKit
 import CoreMedia
 import CoreVideo
+import AudioToolbox
 import Combine
 import AppKit
 
@@ -26,6 +27,7 @@ final class ScreenCaptureManager: NSObject, SCStreamDelegate, SCStreamOutput {
     // Publishers
     let framePublisher = PassthroughSubject<CMSampleBuffer, Never>()
     let fpsPublisher   = PassthroughSubject<Double, Never>()
+    let audioPublisher = PassthroughSubject<Data, Never>()
 
     private(set) var currentDisplayInfo = DisplayInfo(width: 1280, height: 720,
                                                        scaleFactor: 1.0,
@@ -77,13 +79,22 @@ final class ScreenCaptureManager: NSObject, SCStreamDelegate, SCStreamOutput {
         configuration.pixelFormat = kCVPixelFormatType_32BGRA
         configuration.showsCursor  = true
         configuration.scalesToFit  = true
-        configuration.capturesAudio = false
+        configuration.capturesAudio = true
+        configuration.sampleRate = 48000
+        configuration.channelCount = 1
+        if #available(macOS 15.0, *) {
+            configuration.captureMicrophone = true
+        }
         configuration.queueDepth   = 3
 
         let filter = SCContentFilter(display: display, excludingWindows: [])
 
         stream = SCStream(filter: filter, configuration: configuration, delegate: self)
         try stream?.addStreamOutput(self, type: .screen, sampleHandlerQueue: captureQueue)
+        try? stream?.addStreamOutput(self, type: .audio, sampleHandlerQueue: audioQueue)
+        if #available(macOS 15.0, *) {
+            try? stream?.addStreamOutput(self, type: .microphone, sampleHandlerQueue: audioQueue)
+        }
         try await stream?.startCapture()
 
         startFPSTimer()
@@ -120,17 +131,104 @@ final class ScreenCaptureManager: NSObject, SCStreamDelegate, SCStreamOutput {
     // MARK: - SCStreamOutput
 
     private let captureQueue = DispatchQueue(label: "maclink.capture", qos: .userInteractive)
+    private let audioQueue   = DispatchQueue(label: "maclink.capture.audio", qos: .userInteractive)
 
     func stream(_ stream: SCStream,
                 didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
                 of type: SCStreamOutputType) {
-        guard type == .screen,
-              sampleBuffer.isValid else { return }
+        guard sampleBuffer.isValid else { return }
 
-        // Track FPS
-        frameCount += 1
+        if type == .screen {
+            // Track FPS
+            frameCount += 1
+            framePublisher.send(sampleBuffer)
+        } else if type == .audio || type.rawValue == 2 {
+            if let pcm = extractPCM16(from: sampleBuffer) {
+                audioPublisher.send(pcm)
+            }
+        }
+    }
 
-        framePublisher.send(sampleBuffer)
+    private func extractPCM16(from sampleBuffer: CMSampleBuffer) -> Data? {
+        guard let formatDesc = CMSampleBufferGetFormatDescription(sampleBuffer),
+              let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(formatDesc)?.pointee else {
+            return nil
+        }
+
+        guard asbd.mFormatID == kAudioFormatLinearPCM else { return nil }
+
+        var bufferList = AudioBufferList()
+        var blockBuffer: CMBlockBuffer?
+        let status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+            sampleBuffer,
+            bufferListSizeNeededOut: nil,
+            bufferListOut: &bufferList,
+            bufferListSize: MemoryLayout<AudioBufferList>.size,
+            blockBufferAllocator: nil,
+            blockBufferMemoryAllocator: nil,
+            flags: 0,
+            blockBufferOut: &blockBuffer
+        )
+
+        guard status == noErr, let mData = bufferList.mBuffers.mData else { return nil }
+        let byteSize = Int(bufferList.mBuffers.mDataByteSize)
+        guard byteSize > 0 else { return nil }
+
+        let isFloat = (asbd.mFormatFlags & kAudioFormatFlagIsFloat) != 0
+        let channels = Int(asbd.mChannelsPerFrame)
+        let is16Bit = asbd.mBitsPerChannel == 16
+        let is32Bit = asbd.mBitsPerChannel == 32
+
+        if isFloat && is32Bit {
+            let totalFloatSamples = byteSize / MemoryLayout<Float32>.size
+            let floatPtr = mData.bindMemory(to: Float32.self, capacity: totalFloatSamples)
+
+            if channels <= 1 {
+                var outData = Data(count: totalFloatSamples * MemoryLayout<Int16>.size)
+                outData.withUnsafeMutableBytes { outRaw in
+                    let outPtr = outRaw.bindMemory(to: Int16.self)
+                    for i in 0..<totalFloatSamples {
+                        let s = max(-1.0, min(1.0, floatPtr[i]))
+                        outPtr[i] = Int16(s < 0 ? s * 32768.0 : s * 32767.0)
+                    }
+                }
+                return outData
+            } else {
+                let frames = totalFloatSamples / channels
+                var outData = Data(count: frames * MemoryLayout<Int16>.size)
+                outData.withUnsafeMutableBytes { outRaw in
+                    let outPtr = outRaw.bindMemory(to: Int16.self)
+                    for frame in 0..<frames {
+                        let left = floatPtr[frame * channels]
+                        let right = floatPtr[frame * channels + 1]
+                        let mixed = (left + right) * 0.5
+                        let s = max(-1.0, min(1.0, mixed))
+                        outPtr[frame] = Int16(s < 0 ? s * 32768.0 : s * 32767.0)
+                    }
+                }
+                return outData
+            }
+        } else if is16Bit {
+            if channels <= 1 {
+                return Data(bytes: mData, count: byteSize)
+            } else {
+                let totalInt16 = byteSize / MemoryLayout<Int16>.size
+                let inPtr = mData.bindMemory(to: Int16.self, capacity: totalInt16)
+                let frames = totalInt16 / channels
+                var outData = Data(count: frames * MemoryLayout<Int16>.size)
+                outData.withUnsafeMutableBytes { outRaw in
+                    let outPtr = outRaw.bindMemory(to: Int16.self)
+                    for frame in 0..<frames {
+                        let left = Int32(inPtr[frame * channels])
+                        let right = Int32(inPtr[frame * channels + 1])
+                        outPtr[frame] = Int16((left + right) / 2)
+                    }
+                }
+                return outData
+            }
+        }
+
+        return nil
     }
 
     // MARK: - SCStreamDelegate

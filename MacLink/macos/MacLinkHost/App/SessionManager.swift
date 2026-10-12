@@ -168,6 +168,13 @@ final class SessionManager: ObservableObject {
             }
             .store(in: &cancellables)
 
+        // Pipe audio from capture to web remote clients
+        capture.audioPublisher
+            .sink { [weak self] pcmData in
+                self?.webServer.broadcastAudio(pcmData)
+            }
+            .store(in: &cancellables)
+
         capture.fpsPublisher
             .receive(on: RunLoop.main)
             .assign(to: &$framesPerSecond)
@@ -230,6 +237,13 @@ final class SessionManager: ObservableObject {
         capture.framePublisher
             .sink { [weak self] frame in
                 self?.streamer.enqueue(frame)
+            }
+            .store(in: &cancellables)
+
+        // Pipe audio from capture to web remote clients
+        capture.audioPublisher
+            .sink { [weak self] pcmData in
+                self?.webServer.broadcastAudio(pcmData)
             }
             .store(in: &cancellables)
 
