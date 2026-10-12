@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>Shammy</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.personal.Shammy</string>
+    <key>CFBundleName</key>
+    <string>Shammy</string>
+    <key>CFBundleDisplayName</key>
+    <string>Shammy</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>Shammy needs screen recording permission to stream your desktop to your iPhone.</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Shammy needs accessibility permission to control the mouse and keyboard.</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Shammy needs access to the local network to stream your screen to your phone.</string>
+    <key>NSBonjourServices</key>
+    <array>
+        <string>_shammy._tcp</string>
+    </array>
+</dict>
+</plist>
