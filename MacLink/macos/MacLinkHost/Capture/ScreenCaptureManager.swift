@@ -48,6 +48,7 @@ final class ScreenCaptureManager: NSObject, SCStreamDelegate, SCStreamOutput {
 
     private let micCapture = MicrophoneCapture()
     private var cancellables = Set<AnyCancellable>()
+    private let audioMixer = RealtimeAudioMixer()
 
     // MARK: - Start / Stop
 
@@ -95,21 +96,29 @@ final class ScreenCaptureManager: NSObject, SCStreamDelegate, SCStreamOutput {
         stream = SCStream(filter: filter, configuration: configuration, delegate: self)
         try stream?.addStreamOutput(self, type: .screen, sampleHandlerQueue: captureQueue)
         try? stream?.addStreamOutput(self, type: .audio, sampleHandlerQueue: audioQueue)
+        var scMicActive = false
         if #available(macOS 15.0, *) {
-            try? stream?.addStreamOutput(self, type: .microphone, sampleHandlerQueue: audioQueue)
+            do {
+                try stream?.addStreamOutput(self, type: .microphone, sampleHandlerQueue: audioQueue)
+                scMicActive = true
+            } catch {
+                print("[Capture] SCStream microphone not supported: \(error)")
+            }
         }
         try await stream?.startCapture()
 
         startFPSTimer()
         isCapturing = true
 
-        // Start hardware laptop microphone capture
-        micCapture.audioPublisher
-            .sink { [weak self] pcm in
-                self?.audioPublisher.send(pcm)
-            }
-            .store(in: &cancellables)
-        micCapture.start()
+        // Only start fallback AVCaptureSession if SCStream native microphone is not available
+        if !scMicActive {
+            micCapture.audioPublisher
+                .sink { [weak self] pcm in
+                    self?.audioPublisher.send(pcm)
+                }
+                .store(in: &cancellables)
+            micCapture.start()
+        }
     }
 
     func stop() {
@@ -155,93 +164,21 @@ final class ScreenCaptureManager: NSObject, SCStreamDelegate, SCStreamOutput {
             // Track FPS
             frameCount += 1
             framePublisher.send(sampleBuffer)
-        } else if type == .audio || type.rawValue == 2 {
-            if let pcm = extractPCM16(from: sampleBuffer) {
-                audioPublisher.send(pcm)
+        } else if type == .audio {
+            if let samples = AudioPCMUtils.extractMonoFloat32(from: sampleBuffer) {
+                audioMixer.pushSystemAudio(samples)
+                for chunk in audioMixer.popMixedChunks() {
+                    audioPublisher.send(chunk)
+                }
+            }
+        } else if type.rawValue == 2 { // .microphone in macOS 15+
+            if let samples = AudioPCMUtils.extractMonoFloat32(from: sampleBuffer) {
+                audioMixer.pushMicrophoneAudio(samples)
+                for chunk in audioMixer.popMixedChunks() {
+                    audioPublisher.send(chunk)
+                }
             }
         }
-    }
-
-    private func extractPCM16(from sampleBuffer: CMSampleBuffer) -> Data? {
-        guard let formatDesc = CMSampleBufferGetFormatDescription(sampleBuffer),
-              let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(formatDesc)?.pointee else {
-            return nil
-        }
-
-        guard asbd.mFormatID == kAudioFormatLinearPCM else { return nil }
-
-        var bufferList = AudioBufferList()
-        var blockBuffer: CMBlockBuffer?
-        let status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
-            sampleBuffer,
-            bufferListSizeNeededOut: nil,
-            bufferListOut: &bufferList,
-            bufferListSize: MemoryLayout<AudioBufferList>.size,
-            blockBufferAllocator: nil,
-            blockBufferMemoryAllocator: nil,
-            flags: 0,
-            blockBufferOut: &blockBuffer
-        )
-
-        guard status == noErr, let mData = bufferList.mBuffers.mData else { return nil }
-        let byteSize = Int(bufferList.mBuffers.mDataByteSize)
-        guard byteSize > 0 else { return nil }
-
-        let isFloat = (asbd.mFormatFlags & kAudioFormatFlagIsFloat) != 0
-        let channels = Int(asbd.mChannelsPerFrame)
-        let is16Bit = asbd.mBitsPerChannel == 16
-        let is32Bit = asbd.mBitsPerChannel == 32
-
-        if isFloat && is32Bit {
-            let totalFloatSamples = byteSize / MemoryLayout<Float32>.size
-            let floatPtr = mData.bindMemory(to: Float32.self, capacity: totalFloatSamples)
-
-            if channels <= 1 {
-                var outData = Data(count: totalFloatSamples * MemoryLayout<Int16>.size)
-                outData.withUnsafeMutableBytes { outRaw in
-                    let outPtr = outRaw.bindMemory(to: Int16.self)
-                    for i in 0..<totalFloatSamples {
-                        let s = max(-1.0, min(1.0, floatPtr[i]))
-                        outPtr[i] = Int16(s < 0 ? s * 32768.0 : s * 32767.0)
-                    }
-                }
-                return outData
-            } else {
-                let frames = totalFloatSamples / channels
-                var outData = Data(count: frames * MemoryLayout<Int16>.size)
-                outData.withUnsafeMutableBytes { outRaw in
-                    let outPtr = outRaw.bindMemory(to: Int16.self)
-                    for frame in 0..<frames {
-                        let left = floatPtr[frame * channels]
-                        let right = floatPtr[frame * channels + 1]
-                        let mixed = (left + right) * 0.5
-                        let s = max(-1.0, min(1.0, mixed))
-                        outPtr[frame] = Int16(s < 0 ? s * 32768.0 : s * 32767.0)
-                    }
-                }
-                return outData
-            }
-        } else if is16Bit {
-            if channels <= 1 {
-                return Data(bytes: mData, count: byteSize)
-            } else {
-                let totalInt16 = byteSize / MemoryLayout<Int16>.size
-                let inPtr = mData.bindMemory(to: Int16.self, capacity: totalInt16)
-                let frames = totalInt16 / channels
-                var outData = Data(count: frames * MemoryLayout<Int16>.size)
-                outData.withUnsafeMutableBytes { outRaw in
-                    let outPtr = outRaw.bindMemory(to: Int16.self)
-                    for frame in 0..<frames {
-                        let left = Int32(inPtr[frame * channels])
-                        let right = Int32(inPtr[frame * channels + 1])
-                        outPtr[frame] = Int16((left + right) / 2)
-                    }
-                }
-                return outData
-            }
-        }
-
-        return nil
     }
 
     // MARK: - SCStreamDelegate
@@ -278,3 +215,70 @@ enum ScreenCaptureError: LocalizedError {
         }
     }
 }
+
+// MARK: - Realtime Audio Mixer
+
+final class RealtimeAudioMixer {
+    private var systemQueue = [Float32]()
+    private var micQueue = [Float32]()
+    private let lock = NSLock()
+    private let chunkSize = 960 // 20ms at 48000 Hz
+
+    func pushSystemAudio(_ samples: [Float32]) {
+        lock.lock()
+        defer { lock.unlock() }
+        systemQueue.append(contentsOf: samples)
+        // Cap queue to 4800 samples (100ms) to prevent latency buildup
+        if systemQueue.count > 4800 {
+            systemQueue.removeFirst(systemQueue.count - 4800)
+        }
+    }
+
+    func pushMicrophoneAudio(_ samples: [Float32]) {
+        lock.lock()
+        defer { lock.unlock() }
+        micQueue.append(contentsOf: samples)
+        if micQueue.count > 4800 {
+            micQueue.removeFirst(micQueue.count - 4800)
+        }
+    }
+
+    func popMixedChunks() -> [Data] {
+        lock.lock()
+        defer { lock.unlock() }
+
+        var results = [Data]()
+
+        while true {
+            let hasSys = systemQueue.count >= chunkSize
+            let hasMic = micQueue.count >= chunkSize
+
+            if hasSys && hasMic {
+                var chunk = [Float32](repeating: 0, count: chunkSize)
+                for i in 0..<chunkSize {
+                    // Clean vocal mix with headroom
+                    chunk[i] = systemQueue[i] + micQueue[i] * 0.95
+                }
+                systemQueue.removeFirst(chunkSize)
+                micQueue.removeFirst(chunkSize)
+                results.append(AudioPCMUtils.floatToPCM16(chunk))
+            } else if hasSys && micQueue.isEmpty {
+                let chunk = Array(systemQueue.prefix(chunkSize))
+                systemQueue.removeFirst(chunkSize)
+                results.append(AudioPCMUtils.floatToPCM16(chunk))
+            } else if hasMic && systemQueue.isEmpty {
+                var chunk = Array(micQueue.prefix(chunkSize))
+                micQueue.removeFirst(chunkSize)
+                for i in 0..<chunk.count {
+                    chunk[i] *= 1.15 // Gentle boost for room speech
+                }
+                results.append(AudioPCMUtils.floatToPCM16(chunk))
+            } else {
+                break
+            }
+        }
+
+        return results
+    }
+}
+

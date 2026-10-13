@@ -1319,11 +1319,36 @@ private let webClientHTML = """
     let audioEnabled = false; // Audio OFF by default - only connects on explicit user click
     let nextPlayTime = 0;
     const AUDIO_SAMPLE_RATE = 48000;
+    let voiceFilterNode = null;
+    let voiceCompressorNode = null;
+    let voiceGainNode = null;
 
     function initAudio() {
       if (!audioCtx) {
         const AudioContextClass = window.AudioContext || window.webkitAudioContext;
         audioCtx = new AudioContextClass({ sampleRate: AUDIO_SAMPLE_RATE });
+
+        // Voice Clarity Audio Pipeline:
+        // 1. High-pass filter at 85Hz to eliminate low-frequency fan noise & mic rumble
+        voiceFilterNode = audioCtx.createBiquadFilter();
+        voiceFilterNode.type = 'highpass';
+        voiceFilterNode.frequency.value = 85;
+
+        // 2. Dynamics compressor for vocal clarity: levels out quiet speech & prevents clipping
+        voiceCompressorNode = audioCtx.createDynamicsCompressor();
+        voiceCompressorNode.threshold.value = -24; // dB
+        voiceCompressorNode.knee.value = 30;
+        voiceCompressorNode.ratio.value = 3.5;
+        voiceCompressorNode.attack.value = 0.003; // seconds
+        voiceCompressorNode.release.value = 0.25;
+
+        // 3. Clarity gain boost (+2.6dB clean boost for voice presence)
+        voiceGainNode = audioCtx.createGain();
+        voiceGainNode.gain.value = 1.35;
+
+        voiceFilterNode.connect(voiceCompressorNode);
+        voiceCompressorNode.connect(voiceGainNode);
+        voiceGainNode.connect(audioCtx.destination);
       }
       if (audioCtx.state === 'suspended') {
         audioCtx.resume();
@@ -1340,7 +1365,7 @@ private let webClientHTML = """
         if (audioCtx && audioCtx.state === 'suspended') {
           audioCtx.resume();
         }
-        nextPlayTime = (audioCtx ? audioCtx.currentTime : 0) + 0.04;
+        nextPlayTime = (audioCtx ? audioCtx.currentTime : 0) + 0.045;
         if (btn) {
           btn.style.background = 'rgba(16, 185, 129, 0.35)';
           btn.style.borderColor = 'rgba(16, 185, 129, 0.7)';
@@ -1379,11 +1404,16 @@ private let webClientHTML = """
 
       const source = audioCtx.createBufferSource();
       source.buffer = audioBuffer;
-      source.connect(audioCtx.destination);
+      source.connect(voiceFilterNode || audioCtx.destination);
 
       const now = audioCtx.currentTime;
+      // Adaptive Jitter Buffer:
+      // If buffer underrun or fresh start: schedule 45ms in future for smooth cushion
       if (nextPlayTime < now) {
-        nextPlayTime = now + 0.02;
+        nextPlayTime = now + 0.045;
+      } else if (nextPlayTime > now + 0.16) {
+        // If accumulated drift exceeds 160ms (network burst), smoothly resync to 45ms
+        nextPlayTime = now + 0.045;
       }
       source.start(nextPlayTime);
       nextPlayTime += audioBuffer.duration;
