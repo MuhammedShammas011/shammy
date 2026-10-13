@@ -2,3 +2,25 @@
 [SessionManager] Web remote server running on port 55100
 [WebRemoteServer] Listening on port 55100
 [SessionManager] Screen capture started successfully!
+[AudioOutputEngine] Initialized audio playback queue at 48000 Hz
+[SessionManager] Web remote server running on port 55100
+[WebRemoteServer] Listening on port 55100
+[MicrophoneCapture] Started recording from MacBook Pro Microphone
+[SessionManager] Screen capture started successfully!
+[WebRemoteServer] Client subscribed to audio stream
+[WebRemoteServer] Client unsubscribed from audio stream
+[Capture] Stream stopped with error: Error Domain=com.apple.ScreenCaptureKit.SCStreamErrorDomain Code=-3815 "Failed to find any displays or windows to capture" UserInfo={NSLocalizedDescription=Failed to find any displays or windows to capture}
+[MicrophoneCapture] Started recording from AP3
+[SessionManager] Screen capture started successfully!
+[SessionManager] Native control server listening on port 55101
+[Server] Listener state: failed(POSIXErrorCode(rawValue: 22): Invalid argument)
+[Server] Listener state: cancelled
+[MicrophoneCapture] Started recording from AP3
+[SessionManager] Screen capture started successfully!
+[Server] Listener state: failed(POSIXErrorCode(rawValue: 22): Invalid argument)
+[SessionManager] Native control server listening on port 55101
+[WebRemoteServer] Client subscribed to audio stream
+[WebRemoteServer] Client unsubscribed from audio stream
+[WebRemoteServer] Client subscribed to audio stream
+[Capture] Stream stopped with error: Error Domain=com.apple.ScreenCaptureKit.SCStreamErrorDomain Code=-3817 "The user stopped the stream" UserInfo={NSLocalizedDescription=The user stopped the stream}
+[Server] Listener state: cancelled
