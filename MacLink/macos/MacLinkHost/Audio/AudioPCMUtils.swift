@@ -12,7 +12,7 @@ enum AudioPCMUtils {
 
     static func extractMonoFloat32(from sampleBuffer: CMSampleBuffer) -> [Float32]? {
         guard let formatDesc = CMSampleBufferGetFormatDescription(sampleBuffer),
-              let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(formatDesc)?.pointee else {
+              let asbd = CMAudioFormatDescriptionGet:StreamBasicDescription(formatDesc)?.pointee else {
             return nil
         }
 
