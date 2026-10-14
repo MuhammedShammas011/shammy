@@ -24,3 +24,13 @@
 [WebRemoteServer] Client subscribed to audio stream
 [Capture] Stream stopped with error: Error Domain=com.apple.ScreenCaptureKit.SCStreamErrorDomain Code=-3817 "The user stopped the stream" UserInfo={NSLocalizedDescription=The user stopped the stream}
 [Server] Listener state: cancelled
+[AudioOutputEngine] Initialized audio playback queue at 48000 Hz
+[SessionManager] Web remote server running on port 55100
+[WebRemoteServer] Listening on port 55100
+[SessionManager] Screen capture started successfully!
+[WebRemoteServer] Client subscribed to audio stream
+[WebRemoteServer] Client subscribed to audio stream
+[WebRemoteServer] Client unsubscribed from audio stream
+[Capture] Stream stopped with error: Error Domain=com.apple.ScreenCaptureKit.SCStreamErrorDomain Code=-3815 "Failed to find any displays or windows to capture" UserInfo={NSLocalizedDescription=Failed to find any displays or windows to capture}
+[WebRemoteServer] Client subscribed to audio stream
+[WebRemoteServer] Client subscribed to audio stream

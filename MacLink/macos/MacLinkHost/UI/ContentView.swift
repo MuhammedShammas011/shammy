@@ -46,32 +46,12 @@ struct ContentView: View {
     }
 
     // MARK: - Header
-
-    private var appIconImage: NSImage? {
-        if let url = Bundle.main.url(forResource: "AppIcon", withExtension: "png"),
-           let img = NSImage(contentsOf: url) {
-            return img
-        }
-        if let url = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
-           let img = NSImage(contentsOf: url) {
-            return img
-        }
-        return nil
-    }
-
+    
     var headerView: some View {
         HStack(spacing: 12) {
-            if let icon = appIconImage {
-                Image(nsImage: icon)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: 28, height: 28)
-                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-            } else {
-                Image(systemName: "display")
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(.white)
-            }
+            Image(systemName: "display")
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(.white)
             Text("Shammy")
                 .font(.system(size: 18, weight: .semibold, design: .rounded))
                 .foregroundStyle(.white)
@@ -213,6 +193,7 @@ struct ContentView: View {
             Button("Start Session") {
                 session.startSession()
             }
+            .disabled(!session.screenCaptureAuthorized)
             .buttonStyle(PrimaryButtonStyle())
 
         case .listening, .handshaking:
