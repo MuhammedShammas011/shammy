@@ -231,6 +231,29 @@ final class SessionManager: ObservableObject {
         }
     }
 
+    private var captureRestartTask: Task<Void, Never>?
+
+    /// Retries starting screen capture with backoff (2s → 10s) until it succeeds.
+    /// Needed because ScreenCaptureKit fails while the display is asleep.
+    func scheduleCaptureRestart() {
+        guard captureRestartTask == nil else { return }
+        captureRestartTask = Task { @MainActor [weak self] in
+            var delay: UInt64 = 2
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: delay * 1_000_000_000)
+                guard let self else { return }
+                if self.capture.isCapturing { break }
+                await self.ensureCaptureRunning()
+                if self.capture.isCapturing {
+                    print("[SessionManager] Screen capture recovered")
+                    break
+                }
+                delay = min(delay * 2, 10)
+            }
+            self?.captureRestartTask = nil
+        }
+    }
+
     // MARK: - Internal startup
 
     private func startInternal() async {
@@ -258,34 +281,13 @@ final class SessionManager: ObservableObject {
         // 2. Check accessibility (does not block streaming)
         accessibilityAuthorized = PermissionChecker.hasAccessibilityPermission()
 
-        // 3. Pipe frames from capture to video streamer
-        capture.framePublisher
-            .sink { [weak self] frame in
-                self?.streamer.enqueue(frame)
-            }
-            .store(in: &cancellables)
-
-        // Pipe audio from capture to web remote clients
-        capture.audioPublisher
-            .sink { [weak self] pcmData in
-                self?.webServer.broadcastAudio(pcmData)
-            }
-            .store(in: &cancellables)
-
-        capture.fpsPublisher
-            .receive(on: RunLoop.main)
-            .assign(to: &$framesPerSecond)
+        // 3. Frames / audio / fps are already piped once in startWebServer().
+        //    (Subscribing again here made every frame get encoded twice.)
 
         // 4. Start control TCP server in background for native iOS client without blocking
         do {
             try await server.start(port: controlPort)
             print("[SessionManager] Native control server listening on port \(controlPort)")
-
-            server.messagePublisher
-                .sink { [weak self] message in
-                    self?.handleControlMessage(message)
-                }
-                .store(in: &cancellables)
 
             // Listen for native iOS client concurrently in background
             Task { [weak self] in
@@ -359,6 +361,35 @@ final class SessionManager: ObservableObject {
     // MARK: - Observers
 
     private func setupObservers() {
+        // Native iOS client control messages (subscribed once, not per session)
+        server.messagePublisher
+            .sink { [weak self] message in
+                self?.handleControlMessage(message)
+            }
+            .store(in: &cancellables)
+
+        // Screen capture died (display slept, lid closed, monitor change…) → recover.
+        capture.stoppedPublisher
+            .receive(on: RunLoop.main)
+            .sink { [weak self] error in
+                let userStopped = (error as NSError).code == -3817   // "The user stopped the stream"
+                // If the user stopped sharing from the menu bar, don't fight them; the next
+                // phone connection restarts capture. Otherwise keep retrying in the background.
+                if !userStopped { self?.scheduleCaptureRestart() }
+            }
+            .store(in: &cancellables)
+
+        // Display woke up → make sure capture is running again.
+        NSWorkspace.shared.notificationCenter
+            .publisher(for: NSWorkspace.screensDidWakeNotification)
+            .merge(with: NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didWakeNotification))
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.updateNetworkAddresses()
+                self?.scheduleCaptureRestart()
+            }
+            .store(in: &cancellables)
+
         server.statePublisher
             .receive(on: RunLoop.main)
             .sink { [weak self] serverState in

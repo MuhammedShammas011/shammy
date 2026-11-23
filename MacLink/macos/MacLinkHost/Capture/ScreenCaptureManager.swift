@@ -28,6 +28,8 @@ final class ScreenCaptureManager: NSObject, SCStreamDelegate, SCStreamOutput {
     let framePublisher = PassthroughSubject<CMSampleBuffer, Never>()
     let fpsPublisher   = PassthroughSubject<Double, Never>()
     let audioPublisher = PassthroughSubject<Data, Never>()
+    /// Fires (on main) when ScreenCaptureKit stops the stream on its own.
+    let stoppedPublisher = PassthroughSubject<Error, Never>()
 
     private(set) var currentDisplayInfo = DisplayInfo(width: 1280, height: 720,
                                                        scaleFactor: 1.0,
@@ -127,9 +129,11 @@ final class ScreenCaptureManager: NSObject, SCStreamDelegate, SCStreamOutput {
         fpsTimer = nil
         micCapture.stop()
         cancellables.removeAll()
+        // Detach the old stream first so a quick restart can't have its new stream nil'd out.
+        let oldStream = stream
+        stream = nil
         Task {
-            try? await stream?.stopCapture()
-            stream = nil
+            try? await oldStream?.stopCapture()
         }
     }
 
@@ -185,6 +189,13 @@ final class ScreenCaptureManager: NSObject, SCStreamDelegate, SCStreamOutput {
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
         print("[Capture] Stream stopped with error: \(error)")
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.stream === stream else { return }
+            // Reset state so start() can run again (it was stuck at isCapturing = true,
+            // leaving the phone on a frozen screen until the app was relaunched).
+            self.stop()
+            self.stoppedPublisher.send(error)
+        }
     }
 
     // MARK: - FPS timer
