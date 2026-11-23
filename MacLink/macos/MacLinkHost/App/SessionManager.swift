@@ -48,15 +48,39 @@ final class SessionManager: ObservableObject {
     @Published var framesPerSecond: Double = 0
     @Published var lastError: String = ""
 
+    @Published var localHostName: String = ""   // Bonjour name, e.g. "my-mac.local"
+
+    /// Prefer the local network (same Wi-Fi) address; fall back to Tailscale.
     var connectionAddress: String {
-        let ip = tailscaleIP.isEmpty ? localIP : tailscaleIP
+        let ip = localIP.isEmpty ? tailscaleIP : localIP
         return ip.isEmpty ? "" : "\(ip):\(controlPort)"
     }
 
+    /// Web remote URL on the local network (same Wi-Fi). Falls back to Tailscale.
     var webURLString: String {
-        let ip = tailscaleIP.isEmpty ? localIP : tailscaleIP
+        let ip = localIP.isEmpty ? tailscaleIP : localIP
         return ip.isEmpty ? "" : "http://\(ip):\(webPort)"
     }
+
+    /// Stable URL via Bonjour/mDNS – keeps working even if the Wi-Fi IP changes.
+    var localHostURLString: String {
+        localHostName.isEmpty ? "" : "http://\(localHostName):\(webPort)"
+    }
+
+    @Published var tailscaleDNSName: String = ""
+
+    /// Works from ANY network (mobile data, other Wi-Fi) while Tailscale is on in the phone.
+    /// Prefers the MagicDNS name because it never changes.
+    var tailscaleURLString: String {
+        if !tailscaleDNSName.isEmpty { return "http://\(tailscaleDNSName):\(webPort)" }
+        return tailscaleIP.isEmpty ? "" : "http://\(tailscaleIP):\(webPort)"
+    }
+
+    var tailscaleIPURLString: String {
+        tailscaleIP.isEmpty ? "" : "http://\(tailscaleIP):\(webPort)"
+    }
+
+    private let pathMonitor = NWPathMonitor()
 
     // MARK: Sub-systems
     private let capture   = ScreenCaptureManager()
@@ -71,6 +95,7 @@ final class SessionManager: ObservableObject {
     private init() {
         setupObservers()
         updateNetworkAddresses()
+        startNetworkMonitor()
         checkPermissions()
         startWebServer()
     }
@@ -355,5 +380,22 @@ final class SessionManager: ObservableObject {
     func updateNetworkAddresses() {
         localIP = NetworkUtils.localIPAddress() ?? ""
         tailscaleIP = NetworkUtils.tailscaleIPAddress() ?? ""
+        localHostName = NetworkUtils.localHostName() ?? ""
+        Task { [weak self] in
+            let name = await Task.detached { NetworkUtils.tailscaleDNSName() ?? "" }.value
+            self?.tailscaleDNSName = name
+        }
+    }
+
+    /// Re-read addresses whenever Wi-Fi / interfaces change so the shown URL is never stale.
+    private func startNetworkMonitor() {
+        pathMonitor.pathUpdateHandler = { [weak self] _ in
+            Task { @MainActor [weak self] in
+                // Give DHCP a moment to assign the new address
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                self?.updateNetworkAddresses()
+            }
+        }
+        pathMonitor.start(queue: DispatchQueue(label: "shammy.pathmonitor"))
     }
 }

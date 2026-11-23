@@ -108,17 +108,39 @@ struct ContentView: View {
 
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Web Remote (Phone Chrome / Safari)")
+                    Text("Web Remote – any network via Tailscale (Phone Safari / Chrome)")
                         .font(.system(size: 11, weight: .semibold)).foregroundStyle(.cyan)
-                    Text(session.webURLString.isEmpty ? "–" : session.webURLString)
+                    Text(session.tailscaleURLString.isEmpty
+                         ? "Tailscale is off – open Tailscale on the Mac and connect"
+                         : session.tailscaleURLString)
                         .font(.system(size: 13, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(session.tailscaleURLString.isEmpty ? .orange : .white)
+                        .textSelection(.enabled)
+                    if !session.tailscaleDNSName.isEmpty && !session.tailscaleIPURLString.isEmpty {
+                        Text("or \(session.tailscaleIPURLString)")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                    if !session.webURLString.isEmpty {
+                        Text("Same Wi-Fi only: \(session.webURLString)")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                    if !session.localHostURLString.isEmpty {
+                        Text("Same Wi-Fi only: \(session.localHostURLString)")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
                 }
                 Spacer()
-                if !session.webURLString.isEmpty {
+                let primaryURL = session.tailscaleURLString.isEmpty ? session.webURLString : session.tailscaleURLString
+                if !primaryURL.isEmpty {
                     Button(copiedAddress ? "Copied!" : "Copy Web URL") {
                         NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(session.webURLString, forType: .string)
+                        NSPasteboard.general.setString(primaryURL, forType: .string)
                         withAnimation { copiedAddress = true }
                         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                             withAnimation { copiedAddress = false }

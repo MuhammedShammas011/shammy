@@ -43,6 +43,10 @@ final class ControlServer {
         let params = NWParameters.tcp
         params.allowLocalEndpointReuse = true
         params.acceptLocalOnly = false  // allow Tailscale connections
+        // IPv4 listener: the dual-stack default does not receive Tailscale (utun) connections.
+        if let ipOptions = params.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options {
+            ipOptions.version = .v4
+        }
 
         let nwPort = NWEndpoint.Port(integerLiteral: port)
         listener = try NWListener(using: params, on: nwPort)

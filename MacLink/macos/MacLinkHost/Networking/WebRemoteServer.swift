@@ -72,6 +72,12 @@ final class WebRemoteServer {
         params.allowLocalEndpointReuse = true
         params.acceptLocalOnly = false
         params.includePeerToPeer = true
+        // Force an IPv4 listener. The default dual-stack (IPv6) listener never receives
+        // connections arriving through the Tailscale tunnel (utun) on macOS, so the
+        // 100.x.x.x address timed out while the Wi-Fi address worked.
+        if let ipOptions = params.defaultProtocolStack.internetProtocol as? NWProtocolIP.Options {
+            ipOptions.version = .v4
+        }
         if let tcpOptions = params.defaultProtocolStack.transportProtocol as? NWProtocolTCP.Options {
             tcpOptions.enableKeepalive = true
             tcpOptions.keepaliveIdle = 2
@@ -127,20 +133,41 @@ final class WebRemoteServer {
         readHTTP(conn: conn)
     }
 
-    private func readHTTP(conn: NWConnection) {
+    /// Reads until the full HTTP request (headers + Content-Length body) has arrived.
+    /// Over Tailscale / mobile data the headers and body often arrive in separate
+    /// TCP segments, so handling only the first chunk dropped POST bodies.
+    private func readHTTP(conn: NWConnection, buffer: Data = Data()) {
         conn.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] content, _, isComplete, error in
             guard let self = self else { return }
             if error != nil {
                 conn.cancel()
                 return
             }
-            guard let data = content, !data.isEmpty else {
-                if isComplete { conn.cancel() }
-                return
-            }
+            var data = buffer
+            if let content { data.append(content) }
 
-            self.processHTTPRequest(data: data, conn: conn)
+            if self.isCompleteHTTPRequest(data) || (isComplete && !data.isEmpty) {
+                self.processHTTPRequest(data: data, conn: conn)
+            } else if isComplete || data.count > 1_048_576 {
+                conn.cancel()
+            } else {
+                self.readHTTP(conn: conn, buffer: data)
+            }
         }
+    }
+
+    private func isCompleteHTTPRequest(_ data: Data) -> Bool {
+        guard let headerEnd = data.range(of: Data("\r\n\r\n".utf8)) else { return false }
+        let headerText = String(decoding: data[data.startIndex..<headerEnd.lowerBound], as: UTF8.self)
+        var contentLength = 0
+        for line in headerText.components(separatedBy: "\r\n") {
+            let lower = line.lowercased()
+            if lower.hasPrefix("content-length:") {
+                contentLength = Int(lower.dropFirst("content-length:".count)
+                    .trimmingCharacters(in: .whitespaces)) ?? 0
+            }
+        }
+        return data.count - headerEnd.upperBound >= contentLength
     }
 
     private func processHTTPRequest(data: Data, conn: NWConnection) {

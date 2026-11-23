@@ -3,43 +3,86 @@
 // Network address discovery utilities.
 
 import Foundation
+import SystemConfiguration
 #if os(macOS)
 import AppKit
 #endif
 
 public struct NetworkUtils {
 
-    /// Returns the primary non-loopback IPv4 address of the local machine.
+    /// Returns the Mac's IPv4 address on the local network (Wi-Fi / Ethernet).
+    /// Prefers en0, then other en* interfaces. Never returns VPN (utun), Tailscale (100.x)
+    /// or link-local addresses, which a phone on the same Wi-Fi cannot reach.
     public static func localIPAddress() -> String? {
-        var address: String?
         var ifaddr: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&ifaddr) == 0 else { return nil }
         defer { freeifaddrs(ifaddr) }
 
+        var candidates: [(name: String, ip: String)] = []
         var ptr = ifaddr
         while let current = ptr {
-            let flags = Int32(current.pointee.ifa_flags)
-            let isUp       = (flags & IFF_UP) != 0
-            let isLoopback = (flags & IFF_LOOPBACK) != 0
-            let isRunning  = (flags & IFF_RUNNING) != 0
+            defer { ptr = current.pointee.ifa_next }
+            guard let addr = current.pointee.ifa_addr,
+                  addr.pointee.sa_family == UInt8(AF_INET) else { continue }
 
-            if isUp && isRunning && !isLoopback {
-                var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-                let saLen = socklen_t(current.pointee.ifa_addr.pointee.sa_len)
-                if getnameinfo(current.pointee.ifa_addr, saLen,
-                               &hostname, socklen_t(hostname.count),
-                               nil, 0, NI_NUMERICHOST) == 0 {
-                    let ipString = String(cString: hostname)
-                    // Prefer en0-style addresses; skip link-local
-                    if !ipString.hasPrefix("169.254") && ipString.contains(".") {
-                        address = ipString
-                        if String(cString: current.pointee.ifa_name) == "en0" { break }
-                    }
-                }
-            }
-            ptr = current.pointee.ifa_next
+            let flags = Int32(current.pointee.ifa_flags)
+            guard (flags & IFF_UP) != 0, (flags & IFF_RUNNING) != 0,
+                  (flags & IFF_LOOPBACK) == 0 else { continue }
+
+            let name = String(cString: current.pointee.ifa_name)
+            guard name.hasPrefix("en") else { continue }   // Wi-Fi / Ethernet / USB-Ethernet only
+
+            var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            guard getnameinfo(addr, socklen_t(addr.pointee.sa_len),
+                              &hostname, socklen_t(hostname.count),
+                              nil, 0, NI_NUMERICHOST) == 0 else { continue }
+            let ip = String(cString: hostname)
+            if ip.hasPrefix("169.254") || isTailscaleIP(ip) { continue }
+            candidates.append((name, ip))
         }
-        return address
+        if let en0 = candidates.first(where: { $0.name == "en0" }) { return en0.ip }
+        return candidates.first?.ip
+    }
+
+    /// Bonjour hostname (e.g. "My-MacBook-Pro.local"). Resolvable by iPhones/Android
+    /// on the same Wi-Fi and stays the same when the router hands out a new IP.
+    public static func localHostName() -> String? {
+        if let name = SCDynamicStoreCopyLocalHostName(nil) as String?, !name.isEmpty {
+            return "\(name).local"
+        }
+        return nil
+    }
+
+    /// Tailscale MagicDNS name (e.g. "my-mac.tailnet.ts.net"). Never changes, works from any
+    /// network while Tailscale is on in the phone. Blocking – call off the main thread.
+    public static func tailscaleDNSName() -> String? {
+        let candidates = ["/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+                          "/usr/local/bin/tailscale", "/opt/homebrew/bin/tailscale"]
+        guard let exe = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else { return nil }
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: exe)
+        proc.arguments = ["status", "--json", "--peers=false"]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = FileHandle.nullDevice
+        do { try proc.run() } catch { return nil }
+        let killer = DispatchWorkItem { if proc.isRunning { proc.terminate() } }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 3, execute: killer)
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        proc.waitUntilExit()
+        killer.cancel()
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              (json["BackendState"] as? String) == "Running",
+              let me = json["Self"] as? [String: Any],
+              var name = me["DNSName"] as? String, !name.isEmpty else { return nil }
+        if name.hasSuffix(".") { name.removeLast() }
+        return name
+    }
+
+    /// Tailscale uses the CGNAT range 100.64.0.0/10.
+    static func isTailscaleIP(_ ip: String) -> Bool {
+        let parts = ip.split(separator: ".").compactMap { Int($0) }
+        return parts.count == 4 && parts[0] == 100 && (64...127).contains(parts[1])
     }
 
     /// Returns the Tailscale IPv4 address (100.x.x.x range) if the daemon is running.
@@ -60,7 +103,7 @@ public struct NetworkUtils {
                                &hostname, socklen_t(hostname.count),
                                nil, 0, NI_NUMERICHOST) == 0 {
                     let ip = String(cString: hostname)
-                    if ip.hasPrefix("100.") { return ip }
+                    if isTailscaleIP(ip) { return ip }
                 }
             }
             ptr = current.pointee.ifa_next

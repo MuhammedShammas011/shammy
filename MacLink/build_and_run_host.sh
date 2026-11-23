@@ -31,6 +31,7 @@ swiftc -sdk "$SDK_PATH" \
     -framework VideoToolbox \
     -framework CoreGraphics \
     -framework Network \
+    -framework SystemConfiguration \
     -framework CryptoKit \
     -framework AppKit \
     -framework AudioToolbox \
