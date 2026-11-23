@@ -39,3 +39,7 @@
 [WebRemoteServer] Listening on port 55100
 [SessionManager] Screen capture started successfully!
 [Capture] Stream stopped with error: Error Domain=com.apple.ScreenCaptureKit.SCStreamErrorDomain Code=-3817 "The user stopped the stream" UserInfo={NSLocalizedDescription=The user stopped the stream}
+[AudioOutputEngine] Initialized audio playback queue at 48000 Hz
+[SessionManager] Web remote server running on port 55100
+[WebRemoteServer] Listening on port 55100
+[SessionManager] Screen capture started successfully!

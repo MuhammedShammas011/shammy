@@ -60,16 +60,28 @@ final class ControlServer {
         guard let listener else { throw ServerError.notStarted }
 
         return try await withCheckedThrowingContinuation { continuation in
+            // Resume exactly once: on a client handshake, or when the listener fails /
+            // is cancelled (previously the continuation leaked when the session stopped).
+            let once = ResumeOnce(continuation)
+            let finish: @Sendable (Result<String, Error>) -> Void = { once.resume(with: $0) }
+
+            listener.stateUpdateHandler = { state in
+                print("[Server] Listener state: \(state)")
+                switch state {
+                case .failed(let err): finish(.failure(err))
+                case .cancelled:       finish(.failure(ServerError.notStarted))
+                default: break
+                }
+            }
             listener.newConnectionHandler = { [weak self] conn in
                 guard let self else { return }
                 self.listener?.newConnectionHandler = nil   // accept only one
                 self.connection = conn
                 Task {
                     do {
-                        let name = try await self.performHandshake(on: conn)
-                        continuation.resume(returning: name)
+                        finish(.success(try await self.performHandshake(on: conn)))
                     } catch {
-                        continuation.resume(throwing: error)
+                        finish(.failure(error))
                     }
                 }
             }
@@ -243,6 +255,20 @@ final class ControlServer {
         let secret = randomHex(32)
         UserDefaults.standard.set(secret, forKey: key)
         return secret
+    }
+}
+
+/// Guarantees a checked continuation is resumed exactly once, from any thread.
+private final class ResumeOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<String, Error>?
+    init(_ c: CheckedContinuation<String, Error>) { continuation = c }
+    func resume(with result: Result<String, Error>) {
+        lock.lock()
+        let c = continuation
+        continuation = nil
+        lock.unlock()
+        c?.resume(with: result)
     }
 }
 

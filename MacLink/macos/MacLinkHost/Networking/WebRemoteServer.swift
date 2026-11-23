@@ -197,6 +197,10 @@ final class WebRemoteServer {
            upgrade.lowercased().contains("websocket"),
            let keyLine = lines.first(where: { $0.lowercased().hasPrefix("sec-websocket-key:") }) {
             let key = keyLine.components(separatedBy: ":").dropFirst().joined(separator: ":").trimmingCharacters(in: .whitespaces)
+            // A phone (re)connected – make sure the screen is being captured.
+            Task { [weak self] in
+                await self?.onNeedCapture?()
+            }
             handleWebSocketUpgrade(key: key, conn: conn)
             return
         }
